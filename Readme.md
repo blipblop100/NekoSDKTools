@@ -1,4 +1,4 @@
-# NekoSDK Translation Extraction & Recompilation Tool (Python)
+# NekoSDK Translation Extraction & Recompilation Tool
 
 This is a Python-based utility to parse, extract, and recompile NekoSDK `ADV_SCRIPT2` binary scene files.
 It is based on the [nekosdk_tools](https://github.com/adsf0427/nekosdk_tools) by skyler sora (adsf0427). 
