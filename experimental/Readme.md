@@ -1,4 +1,4 @@
-# NekoSDK Translation Extraction & Recompilation Tool
+# NekoSDK Translation Extraction & Recompilation Tool (C++)
 
 This is an (LLM converted) experimental C++ version of the NekoSDK tool. It's extraction and recompilation times are significantly faster compared to the Python implementation. This implementation uses 3rd party JSON libraries for maximum JSON parsing performance via [simdjson](https://github.com/simdjson/simdjson) and [nlohmann json](https://github.com/nlohmann/json).
 
