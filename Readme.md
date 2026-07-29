@@ -7,14 +7,6 @@ It uses the [Kaitai Struct](https://kaitai.io/) framework to extract the charact
 ### Prerequisites & Setup
 
 You will need Python installed on your system to run this tool.
-Before running the script for the first time, you must install the required Kaitai Struct library. Open your command prompt or terminal and run:
-
-```
-pip install kaitaistruct
-
-```
-
-*(Note: Kaitai Struct version 0.9 or later is required).*
 
 ### How to Use
 
