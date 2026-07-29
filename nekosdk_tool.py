@@ -173,6 +173,8 @@ def extract_all(script_dir: Path, json_dir: Path):
 def wrap_text(text: str, max_len=90):
     if not text:
         return text
+    elif max_len is None:
+        return text
     text = text.replace("\n", " ")
     words = text.split(" ")
     lines = []
