@@ -1,184 +1,124 @@
 # coding: utf-8
-import io
+from __future__ import annotations
+
 import json
 import struct
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-import kaitaistruct
-from kaitaistruct import KaitaiStruct, KaitaiStream
 
-encd = 'sjis'
+# ENGINE CONSTANTS & SETUP
+MAGIC = b"NEKOSDK_ADVSCRIPT2\x00"
+ENCODING = "sjis"
+HEADER_FORMAT = "<4I 128s I 64s"  # 16 + 128 + 4 + 64 = 212 bytes
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+STRS_PER_NODE = 33
+# OPTIONAL CONFIG
+RECOMPILE_MAIN = False  # Set to True to recompile hidden developer commands (node.strs[0])
 
-if getattr(kaitaistruct, 'API_VERSION', (0, 9)) < (0, 9):
-    raise Exception(
-        "Incompatible Kaitai Struct Python API: 0.9 or later is required, "
-        f"but you have {kaitaistruct.__version__}"
-    )
 
-class NekosdkAdvscript2(KaitaiStruct):
-    def __init__(self, _io: KaitaiStream, _parent: KaitaiStruct | None=None, _root: KaitaiStruct | None=None):
-        self._io = _io
-        self._parent = _parent
-        self._root = _root if _root else self
-        self._read()
+# FAST BINARY DATA MODELS
+@dataclass(slots=True)
+class Node:
+    id: int
+    type1: int
+    some_ofs: int
+    opcode: int
+    spacer1: bytes  # 128 bytes
+    next_id: int
+    spacer2: bytes  # 64 bytes
+    strs: list[bytes]  # Stored as raw bytes for lazy decoding
 
-    def _read(self):
-        self.magic = self._io.read_bytes(19)
-        if self.magic != b"\x4E\x45\x4B\x4F\x53\x44\x4B\x5F\x41\x44\x56\x53\x43\x52\x49\x50\x54\x32\x00":
-            raise kaitaistruct.ValidationNotEqualError(
-                b"\x4E\x45\x4B\x4F\x53\x44\x4B\x5F\x41\x44\x56\x53\x43\x52\x49\x50\x54\x32\x00",
-                self.magic,
-                self._io,
-                u"/seq/0"
+    def get_str(self, index: int) -> str:
+        """Lazy-decodes a specific string slot on demand."""
+        if index < len(self.strs) and self.strs[index]:
+            return self.strs[index].decode(ENCODING, errors="replace")
+        return ""
+
+    def set_str(self, index: int, text: str):
+        """Encodes and null-terminates a string slot."""
+        if not text.endswith("\x00"):
+            text += "\x00"
+        self.strs[index] = text.encode(ENCODING, errors="replace")
+
+
+# BINARY PARSER & SERIALIZER
+def parse_script(data: bytes) -> list[Node]:
+    """Unpacks a raw NekoSDK ADV_SCRIPT2 binary buffer into a list of Node objects."""
+    if not data.startswith(MAGIC):
+        raise ValueError("Invalid NEKOSDK_ADVSCRIPT2 header.")
+
+    # Read node count at byte offset 19
+    (nodes_qty,) = struct.unpack_from("<I", data, 19)
+    pos = 23
+    nodes: list[Node] = []
+
+    for _ in range(nodes_qty):
+        # 1. Unpack the 212-byte fixed header in one C-speed instruction
+        n_id, type1, some_ofs, opcode, sp1, next_id, sp2 = struct.unpack_from(
+            HEADER_FORMAT, data, pos
+        )
+        pos += HEADER_SIZE
+
+        # 2. Extract the 33 string slots
+        strs: list[bytes] = []
+        for _ in range(STRS_PER_NODE):
+            (s_len,) = struct.unpack_from("<I", data, pos)
+            pos += 4
+            strs.append(data[pos : pos + s_len])
+            pos += s_len
+
+        nodes.append(
+            Node(n_id, type1, some_ofs, opcode, sp1, next_id, sp2, strs)
+        )
+
+    return nodes
+
+
+def serialize_script(nodes: list[Node]) -> bytes:
+    """Serializes a list of Node objects back into a raw binary buffer."""
+    buf = bytearray(MAGIC)
+    buf.extend(struct.pack("<I", len(nodes)))
+
+    for n in nodes:
+        # Pack 212-byte header
+        buf.extend(
+            struct.pack(
+                "<4I 128s I 64s",
+                n.id,
+                n.type1,
+                n.some_ofs,
+                n.opcode,
+                n.spacer1,
+                n.next_id,
+                n.spacer2,
             )
-        self.nodes_qty = self._io.read_u4le()
-        self.nodes: list[NekosdkAdvscript2.Node] = []
-        for _ in range(self.nodes_qty):
-            self.nodes.append(NekosdkAdvscript2.Node(self._io, self, self._root))
+        )
 
-    def write(self, of: io.BufferedWriter):
-        of.write(self.magic)
-        of.write(struct.pack('<I', len(self.nodes)))
-        for node in self.nodes:
-            node.write(of)
+        # Pack 33 strings
+        for s_bytes in n.strs:
+            buf.extend(struct.pack("<I", len(s_bytes)))
+            buf.extend(s_bytes)
 
-    class Nekostr(KaitaiStruct):
-        def __init__(self, _io: KaitaiStream, _parent: KaitaiStruct | None=None, _root: KaitaiStruct | None=None):
-            self._io = _io
-            self._parent = _parent
-            self._root = _root if _root else self
-            self._read()
+    return bytes(buf)
 
-        def _read(self):
-            self.len: int = self._io.read_u4le()
-            raw: bytes = self._io.read_bytes(self.len)
-            self.raw = raw
-            self.value = raw.decode(encd, errors="replace")
 
-        def write(self, of: io.BufferedWriter, encoding=encd, preserve_len=False):
-            text = self.value or ""
-            if not text.endswith("\x00"):
-                text += "\x00"
-
-            try:
-                str_b = text.encode(encoding)
-            except UnicodeEncodeError:
-                str_b = text.encode(encoding, errors="replace")
-
-            if preserve_len:
-                target_len = self.len
-                if len(str_b) > target_len:
-                    print(f"[WARN] truncating string {len(str_b)} -> {target_len}")
-                    str_b = str_b[:target_len]
-                elif len(str_b) < target_len:
-                    str_b += b"\x00" * (target_len - len(str_b))
-            else:
-                target_len = len(str_b)
-
-            of.write(struct.pack('<I', target_len))
-            of.write(str_b)
-
-    class Node(KaitaiStruct):
-        def __init__(self, _io: KaitaiStream, _parent: KaitaiStruct | None=None, _root: KaitaiStruct | None=None):
-            self._io = _io
-            self._parent = _parent
-            self._root = _root if _root else self
-            self._read()
-
-        def _read(self):
-            self.id: int = self._io.read_u4le()
-            self.type1: int = self._io.read_u4le()
-            self.some_ofs: int = self._io.read_u4le()
-            self.opcode: int = self._io.read_u4le()
-            self.spacer1: bytes = self._io.read_bytes(128)
-            self.next_id: int = self._io.read_u4le()
-            self.spacer2: bytes = self._io.read_bytes(64)
-            self.strs: list[NekosdkAdvscript2.Nekostr] = []
-            for _ in range(33):
-                self.strs.append(NekosdkAdvscript2.Nekostr(self._io, self, self._root))
-
-        def write(self, of: io.BufferedWriter):
-            of.write(struct.pack('<I', self.id))
-            of.write(struct.pack('<I', self.type1))
-            of.write(struct.pack('<I', self.some_ofs))
-            of.write(struct.pack('<I', self.opcode))
-            of.write(self.spacer1)
-            of.write(struct.pack('<I', self.next_id))
-            of.write(self.spacer2)
-
-            for i, s in enumerate(self.strs):
-                s.write(of, encoding=encd, preserve_len=False)
-
+# TEXT & JSON HELPERS
 def clean_text(s: str) -> str:
-    if s is None:
+    if not s:
         return ""
     return str(s).replace("\r\n", "\n").replace("\x00", "").strip()
 
-def ensure_null_terminated(s: str) -> str:
-    if s is None:
-        return ""
-    return s if s.endswith("\x00") else s + "\x00"
 
-def load_json(path: Path):
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path: Path, data):
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def extract_one(input_path: Path, output_path: Path):
-    with input_path.open("rb") as f:
-        scr = NekosdkAdvscript2.from_io(f)
-
-    out = []
-    for node in scr.nodes:
-        if node.opcode == 5:
-            character = ""
-            original = ""
-
-            if len(node.strs) > 1:
-                character = clean_text(node.strs[1].value)
-            if len(node.strs) > 2:
-                original = clean_text(node.strs[2].value)
-
-            out.append({
-                "node_id": node.id,
-                "character": character,
-                "character_eng": "",
-                "original": original,
-                "translation": ""
-            })
-
-    if out: 
-        save_json(output_path, out)
-        print(f"[EXTRACT] {input_path.name} -> {output_path.name} ({len(out)} entries)")
-    else:
-        print(f"[SKIP] {input_path.name} contained no dialogue nodes.")
-
-
-def extract_all(script_dir: Path, json_dir: Path):
-    json_dir.mkdir(parents=True, exist_ok=True)
-    for input_path in sorted(script_dir.glob("*.txt")): 
-        if not input_path.is_file():
-            continue
-        
-        output_path = json_dir / (input_path.stem + ".json")
-        try:
-            extract_one(input_path, output_path)
-        except kaitaistruct.ValidationNotEqualError:
-            print(f"[SKIP] {input_path.name} is not a valid NekoSDK binary file (invalid header).")
-        except Exception as e:
-            print(f"[ERROR] Failed to extract from {input_path.name}: {e}")
-
-def wrap_text(text: str, max_len=90):
+def wrap_text(text: str, max_len: int | None = 90) -> str:
     if not text:
         return text
-    elif max_len is None:
+    if max_len is None:
         return text
-    text = text.replace("\n", " ")
+
     words = text.split(" ")
-    lines = []
-    current_line: str = ""
+    lines: list[str] = []
+    current_line = ""
 
     for word in words:
         if len(current_line) + len(word) + 1 > max_len:
@@ -190,74 +130,144 @@ def wrap_text(text: str, max_len=90):
     if current_line:
         lines.append(current_line.rstrip())
 
-    return "\r\n ".join(lines)
+    return " \r\n".join(lines)
 
 
-def recompile_one(input_path: Path, json_path: Path, output_path: Path, wrap_ch = 85):
-    with input_path.open("rb") as f:
-        scr = NekosdkAdvscript2.from_io(f)
+def make_text_main(name: str, message: str, old_main: str) -> str:
+    """Reconstructs the hidden developer Main Command Block (Slot 0)."""
+    voice = ""
+    # Fast scan for voice/audio tags in the original Japanese command block
+    for line in old_main.split("\n"):
+        if line.startswith("[テキスト表示]"):
+            for part in line.split()[1:]:
+                if "\\" in part or "/" in part:
+                    voice = part
+                    break
+            break
 
+    speaker = name or ""
+    first = f"[テキスト表示] {speaker} {voice}".rstrip()
+    display_message = message.replace("\r\n", "\n")
+    return f"{first}\n{display_message}\n\n"
+
+
+def load_json(path: Path):
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_json(path: Path, data):
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# CORE ENGINE WORKFLOWS
+def extract_one(input_path: Path, output_path: Path):
+    nodes = parse_script(input_path.read_bytes())
+    out = []
+
+    for node in nodes:
+        if node.opcode == 5:
+            character = clean_text(node.get_str(1)) if len(node.strs) > 1 else ""
+            original = clean_text(node.get_str(2)) if len(node.strs) > 2 else ""
+
+            out.append(
+                {
+                    "node_id": node.id,
+                    #"next_id": node.next_id,
+                    "character": character,
+                    "character_eng": "",
+                    "original": original,
+                    "translation": "",
+                }
+            )
+
+    if out:
+        save_json(output_path, out)
+        print(f"[EXTRACT] {input_path.name} -> {output_path.name} ({len(out)} entries)")
+    else:
+        print(f"[SKIP] {input_path.name} contained no dialogue nodes.")
+
+
+def extract_all(script_dir: Path, json_dir: Path):
+    json_dir.mkdir(parents=True, exist_ok=True)
+    for input_path in sorted(script_dir.glob("*.txt")):
+        if not input_path.is_file():
+            continue
+
+        output_path = json_dir / (input_path.stem + ".json")
+        try:
+            extract_one(input_path, output_path)
+        except ValueError:
+            print(f"[SKIP] {input_path.name} is not a valid NekoSDK binary file (invalid header).")
+        except Exception as e:
+            print(f"[ERROR] Failed to extract from {input_path.name}: {e}")
+
+
+def recompile_one(input_path: Path, json_path: Path, output_path: Path, wrap_ch: int | None):
+    nodes = parse_script(input_path.read_bytes())
     data = load_json(json_path)
+
     if not isinstance(data, list):
         raise ValueError(f"{json_path} must contain a JSON array")
 
     by_id = {}
     for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        node_id = entry.get("node_id")
-        if node_id is not None:
-            by_id[int(node_id)] = entry
+        if isinstance(entry, dict) and entry.get("node_id") is not None:
+            by_id[int(entry["node_id"])] = entry
 
     replaced = 0
     warned = 0
 
-    for node in scr.nodes:
-        if node.opcode != 5: 
+    for node in nodes:
+        if node.opcode != 5:
             continue
 
         entry = by_id.get(node.id)
         if not entry:
             continue
 
-        # --- Sanity check against original text ---
+        # Sanity check against original Japanese text
         json_original = clean_text(entry.get("original", ""))
-        current_original = ""
-        if len(node.strs) > 2:
-            current_original = clean_text(node.strs[2].value)
+        current_original = clean_text(node.get_str(2)) if len(node.strs) > 2 else ""
 
         if json_original and current_original and json_original != current_original:
             warned += 1
             print(f"[WARN] Original mismatch at node {node.id}")
 
-        # --- 1. Update Character Name (Slot 1) ---
+        # 1. Update Character Name (Slot 1)
         character_eng = clean_text(entry.get("character_eng", ""))
         character_jp = clean_text(entry.get("character", ""))
         character_to_use = character_eng if character_eng else character_jp
 
         if character_to_use and len(node.strs) > 1:
-            node.strs[1].value = ensure_null_terminated(character_to_use)
+            node.set_str(1, character_to_use)
 
-        # --- 2. Update Translated Dialogue (Slot 2) ---
+        # 2. Update Translated Dialogue (Slot 2)
         translation = clean_text(entry.get("translation", ""))
-        
         if translation and len(node.strs) > 2:
-            translation = wrap_text(translation, wrap_ch)
-            node.strs[2].value = ensure_null_terminated(translation)
+            translation_wrapped = wrap_text(translation, max_len=wrap_ch)
+            node.set_str(2, translation_wrapped)
+
+            # 3. Update Main Command Block (Slot 0) if enabled in config
+            if RECOMPILE_MAIN and len(node.strs) > 0:
+                old_main = clean_text(node.get_str(0))
+                new_main = make_text_main(character_to_use, translation_wrapped, old_main)
+                node.set_str(0, new_main)
+
             replaced += 1
 
-    with output_path.open("wb") as f:
-        scr.write(f)
-
+    # Write binary file in one single atomic operation
+    output_path.write_bytes(serialize_script(nodes))
     print(f"[RECOMPILE] {input_path.name} -> {output_path.name} ({replaced} replacements, {warned} warnings)")
 
 
-def recompile_all(script_dir: Path, json_dir: Path, output_dir: Path, wrap_ch=85, force=False):
+def recompile_all(script_dir: Path, json_dir: Path, output_dir: Path, wrap_ch: int | None = None, force: bool = False):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     skipped_count = 0
     compiled_count = 0
-    
+
     for input_path in sorted(script_dir.glob("*.txt")):
         if not input_path.is_file():
             continue
@@ -268,24 +278,24 @@ def recompile_all(script_dir: Path, json_dir: Path, output_dir: Path, wrap_ch=85
             continue
 
         output_path = output_dir / input_path.name
-        
+
         if not force and output_path.exists():
             json_mtime = json_path.stat().st_mtime
             input_mtime = input_path.stat().st_mtime
             output_mtime = output_path.stat().st_mtime
-            
+
             if json_mtime <= output_mtime and input_mtime <= output_mtime:
                 skipped_count += 1
                 continue
 
         try:
-            recompile_one(input_path, json_path, output_path, wrap_ch=wrap_ch)
+            recompile_one(input_path, json_path, output_path, wrap_ch)
             compiled_count += 1
-        except kaitaistruct.ValidationNotEqualError:
+        except ValueError:
             print(f"[SKIP] {input_path.name} is not a valid NekoSDK binary file (invalid header).")
         except Exception as e:
             print(f"[ERROR] Failed to recompile {input_path.name}: {e}")
-  
+
     if skipped_count > 0:
         print(f"[INFO] Skipped {skipped_count} unmodified file(s) to save time.")
     if compiled_count == 0:
@@ -294,13 +304,67 @@ def recompile_all(script_dir: Path, json_dir: Path, output_dir: Path, wrap_ch=85
     print(f"\n[DONE] Successfully recompiled {compiled_count} file(s).")
 
 
+# SCENE EXECUTION TRACING
+def trace_scene_execution(input_path: Path, missing_node_id: int | None = None):
+    """Maps the execution flow of a scene by following next_id pointers."""
+    nodes = parse_script(input_path.read_bytes())
+    nodes_by_id = {node.id: node for node in nodes}
 
-# CONFIG
-# -------------------------
+    trace_log = []
+    visited = set()
+    current_node = nodes[0]
+
+    trace_log.append(f"--- TRACING EXECUTION FOR {input_path.name} ---")
+
+    while current_node is not None:
+        if current_node.id in visited:
+            trace_log.append(f"\n[LOOP DETECTED] Node {current_node.id} was already visited. Halting trace.")
+            break
+
+        visited.add(current_node.id)
+
+        preview = ""
+        if current_node.opcode == 5 and len(current_node.strs) > 2:
+            preview = f" | TEXT: {clean_text(current_node.get_str(2))[:40]}..."
+        elif len(current_node.strs) > 0:
+            for i in range(len(current_node.strs)):
+                cleaned = clean_text(current_node.get_str(i))
+                if cleaned:
+                    preview = f" | DATA: {cleaned[:40]}"
+                    break
+
+        trace_log.append(
+            f"ID: {current_node.id:<5} -> NEXT: {current_node.next_id:<5} | OPCODE: {current_node.opcode:<3}{preview}"
+        )
+
+        if current_node.next_id in nodes_by_id:
+            if current_node.next_id == current_node.id:
+                trace_log.append("\n[END OF SCRIPT] Reached terminal node.")
+                break
+            current_node = nodes_by_id[current_node.next_id]
+        else:
+            trace_log.append(f"\n[DEAD END] next_id {current_node.next_id} does not exist in the file.")
+            break
+
+    trace_output = input_path.with_suffix(".trace.txt")
+    trace_output.write_text("\n".join(trace_log), encoding="utf-8")
+
+    print(f"[TRACE] Saved execution map to {trace_output.name}")
+    print(f"        Total nodes in file: {len(nodes)}")
+    print(f"        Nodes executed in default path: {len(visited)}")
+
+    if missing_node_id is not None:
+        if missing_node_id in visited:
+            print(f"🔍 Result: Missing Node {missing_node_id} IS in the default execution path!")
+        else:
+            print(f"🔍 Result: Missing Node {missing_node_id} is NOT in the default execution path. It is being skipped.")
+
+
+# CONFIG & MAIN
 SCRIPT_DIR = "scr"
 JSON_DIR = "translation_jsons"
 OUTPUT_DIR = "output"
-# -------------------------
+
 
 if __name__ == "__main__":
     script_dir = Path(SCRIPT_DIR)
@@ -310,16 +374,27 @@ if __name__ == "__main__":
     output_dir = Path(OUTPUT_DIR)
     output_dir.mkdir(exist_ok=True)
 
-    COMMAND = input("extract (et), recompile (re), or force-recompile (fre): ").strip().lower()
+    COMMAND = input("extract (et), recompile (re), force-recompile (fre), or trace (tr): ").strip().lower()
 
     if COMMAND in ["extract", "et"]:
         extract_all(script_dir, json_dir)
 
     elif COMMAND in ["recompile", "re"]:
         recompile_all(script_dir, json_dir, output_dir, wrap_ch=77, force=False)
-            
+
     elif COMMAND in ["force-recompile", "fre"]:
         print("\n[WARNING] Forcing recompilation of ALL files regardless of modification dates...\n")
         recompile_all(script_dir, json_dir, output_dir, wrap_ch=77, force=True)
+
+    elif COMMAND in ["trace", "tr"]:
+        target_file = input("Enter the exact filename to trace (e.g. ep_006_012_000.txt): ").strip()
+        target_path = script_dir / target_file
+
+        if not target_path.exists():
+            print(f"[ERROR] File '{target_file}' not found in '{SCRIPT_DIR}' folder.")
+        else:
+            node_input = input("Enter the missing node ID (or press Enter to skip): ").strip()
+            missing_id = int(node_input) if node_input.isdigit() else None
+            trace_scene_execution(target_path, missing_id)
     else:
         print("Invalid COMMAND")
