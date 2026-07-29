@@ -2,7 +2,6 @@
 
 This is a Python-based utility to parse, extract, and recompile NekoSDK `ADV_SCRIPT2` binary scene files.
 It is based on the [nekosdk_tools](https://github.com/adsf0427/nekosdk_tools) by skyler sora (adsf0427). 
-It uses the [Kaitai Struct](https://kaitai.io/) framework to extract the character and text data from the game scripts (.txt) into editable JSON formats.
 
 ### Prerequisites & Setup
 
