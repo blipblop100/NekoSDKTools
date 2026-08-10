@@ -37,14 +37,14 @@ namespace fs = std::filesystem;
 // =============================================================================
 struct Configuration {
     fs::path SCRIPT_DIR = "scr";
-    fs::path JSON_DIR = "jp_scripts_with_translations";
+    fs::path JSON_DIR = "translation_jsons";
     fs::path OUTPUT_DIR = "output";
 
     size_t TEXT_WRAP_CH = 77;
-    bool CLEAN_EXISTING_NEWLINES = true;
+    bool CLEAN_EXISTING_NEWLINES = false;
     float FILL_WINDOW = 0.65f;
 
-    bool RECOMPILE_MAIN = true;
+    bool RECOMPILE_MAIN = false;
 };
 
 Configuration Config;
