@@ -54,6 +54,7 @@ When you run the tool for the first time, it generates a `config.ini` file. You 
 * **`CLEAN_EXISTING_NEWLINES`**: If `true`, the tool deletes the existing line breaks before applying the English word-wrapper (Default: `false`).
 * **`FILL_WINDOW`**: Controls how aggressively the tool looks for clean sentence breaks (periods, question marks) to wrap text nicely instead of splitting in the middle of a sentence. `0.65` means it looks in the last 35% of the line (Default: `0.65`).
 * **`RECOMPILE_MAIN`**: If `true`, the tool also safely rebuilds the hidden developer command blocks (Slot 0) with your translated texts (Default: `false`).
+* **`VERBOSE_OUTPUT`**: Set true to output all of the recompilation and extraction messages in the command prompt (Default: `false`).
 
 ---
 
