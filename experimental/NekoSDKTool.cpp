@@ -43,6 +43,7 @@ struct Configuration {
     float FILL_WINDOW = 0.65f;
 
     bool RECOMPILE_MAIN = false;
+    bool VERBOSE_OUTPUT = false;
 };
 
 Configuration Config;
@@ -74,7 +75,8 @@ void load_or_create_config() {
             << "CLEAN_EXISTING_NEWLINES=false\n"
             << "FILL_WINDOW=0.65\n\n"
             << "[Optional]\n"
-            << "RECOMPILE_MAIN=false\n";
+            << "RECOMPILE_MAIN=false\n"
+            << "VERBOSE_OUTPUT=false\n";
         std::println("[INFO] Generated default config.ini");
         return;
     }
@@ -103,11 +105,11 @@ void load_or_create_config() {
             else if (key == "CLEAN_EXISTING_NEWLINES") Config.CLEAN_EXISTING_NEWLINES = (val_lower == "true" || val == "1");
             else if (key == "FILL_WINDOW") Config.FILL_WINDOW = std::stof(val);
             else if (key == "RECOMPILE_MAIN") Config.RECOMPILE_MAIN = (val_lower == "true" || val == "1");
+            else if (key == "VERBOSE_OUTPUT") Config.VERBOSE_OUTPUT = (val_lower == "true" || val == "1");
         } catch (const std::exception& e) {
             std::println("[WARN] Failed to parse config key '{}': {}", key, e.what());
         }
     }
-    std::println("[INFO] Loaded configuration from config.ini");
 }
 
 std::string sjis_to_utf8(std::string_view sjis) {
@@ -442,7 +444,7 @@ void extract_all() {
         if (entry_count > 0) {
             std::ofstream o(output_path);
             o << json_out;
-            std::println("[EXTRACT] {} -> {} ({} entries)", input_path.filename().string(), output_path.filename().string(), entry_count);
+            if (Config.VERBOSE_OUTPUT) std::println("[EXTRACT] {} -> {} ({} entries)", input_path.filename().string(), output_path.filename().string(), entry_count);
         } else {
             std::println("[SKIP] {} contained no dialogue nodes.", input_path.filename().string());
         }
@@ -569,7 +571,7 @@ void recompile_all(bool force) {
 
         write_script(output_path, *scr);
         compiled_count++;
-        std::println("[RECOMPILE] {} -> {} ({} replacements, {} warnings)", input_path.filename().string(), output_path.filename().string(), replaced, warned);
+        if (Config.VERBOSE_OUTPUT) std::println("[RECOMPILE] {} -> {} ({} replacements, {} warnings)", input_path.filename().string(), output_path.filename().string(), replaced, warned);
     });
 
     if (skipped_count > 0) std::println("[INFO] Skipped {} unmodified file(s) to save time.", skipped_count.load());
