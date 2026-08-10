@@ -32,9 +32,7 @@
 
 namespace fs = std::filesystem;
 
-// =============================================================================
 // GLOBAL CONFIGURATION (Loaded from config.ini)
-// =============================================================================
 struct Configuration {
     fs::path SCRIPT_DIR = "scr";
     fs::path JSON_DIR = "translation_jsons";
@@ -49,9 +47,7 @@ struct Configuration {
 
 Configuration Config;
 
-// =============================================================================
 // String Manipulation Helpers
-// =============================================================================
 std::string ltrim_copy(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
     return s;
@@ -71,14 +67,14 @@ void load_or_create_config() {
         out << "; NekoSDK Tool Configuration File\n\n"
             << "[Directories]\n"
             << "SCRIPT_DIR=scr\n"
-            << "JSON_DIR=jp_scripts_with_translations\n"
+            << "JSON_DIR=translation_jsons\n"
             << "OUTPUT_DIR=output\n\n"
             << "[TextWrapping]\n"
             << "TEXT_WRAP_CH=77\n"
-            << "CLEAN_EXISTING_NEWLINES=true\n"
+            << "CLEAN_EXISTING_NEWLINES=false\n"
             << "FILL_WINDOW=0.65\n\n"
             << "[Optional]\n"
-            << "RECOMPILE_MAIN=true\n";
+            << "RECOMPILE_MAIN=false\n";
         std::println("[INFO] Generated default config.ini");
         return;
     }
@@ -308,9 +304,7 @@ std::string make_text_main(const std::string& name, const std::string& message, 
     return first + "\n" + display_message + "\n\n";
 }
 
-// =============================================================================
 // Binary Struct Layout & Fast IO
-// =============================================================================
 struct NekoStr {
     uint32_t len = 0;
     std::string raw; 
@@ -402,9 +396,7 @@ void write_script(const fs::path& path, const Script& scr) {
     }
 }
 
-// =============================================================================
 // Core Multithreaded Routines
-// =============================================================================
 void extract_all() {
     fs::create_directories(Config.JSON_DIR);
     std::vector<fs::path> files;
@@ -661,9 +653,7 @@ void trace_scene_execution(const fs::path& input_path, int missing_node_id) {
     }
 }
 
-// =============================================================================
 // Main Entrypoint
-// =============================================================================
 int main() {
     load_or_create_config();
 
