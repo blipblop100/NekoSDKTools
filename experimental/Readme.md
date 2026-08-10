@@ -10,7 +10,7 @@ This is an (LLM converted) experimental C++ version of the NekoSDK tool. It's ex
 1. Double-click `NekoSDKTool.exe` to open the command prompt.
 2. On your first run, a `config.ini` file will be generated alongside three default folders:
 * **`scr`**: Place all of your source scripts (`.txt` files) in here.
-* **`translations_jsons`**: The tool will output the extracted `.json` text data here.
+* **`translation_jsons`**: The tool will output the extracted `.json` text data here.
 * **`output`**: Your newly translated and recompiled `.txt` scripts will be saved here.
 
 
